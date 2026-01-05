@@ -1,8 +1,30 @@
 import os
 import chainlit as cl
+from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
+from chainlit.types import ThreadDict
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# SQLite persistence for chat history
+@cl.data_layer
+def get_data_layer():
+    return SQLAlchemyDataLayer(conninfo="sqlite+aiosqlite:///chat_history.db")
+
+
+@cl.header_auth_callback
+def header_auth_callback(headers: dict) -> cl.User | None:
+    # No auth required - return default user for local use
+    return cl.User(identifier="local_user")
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: ThreadDict):
+    # Restore agent state when resuming a thread
+    agent = create_agent(tools=get_tools())
+    cl.user_session.set("agent", agent)
+    cl.user_session.set("thread_id", thread["id"])
+
 
 from agent import create_agent, run_agent_simple
 from agent.tools import get_tools
@@ -162,9 +184,15 @@ async def on_message(message: cl.Message):
 
 
 def _strip_markdown(text: str) -> str:
-    """Strip markdown formatting for cleaner TTS."""
+    """Strip markdown and LaTeX formatting for cleaner TTS."""
     import re
 
+    # Remove LaTeX display math ($$...$$, \[...\])
+    text = re.sub(r"\$\$[\s\S]*?\$\$", "", text)
+    text = re.sub(r"\\\[[\s\S]*?\\\]", "", text)
+    # Remove LaTeX inline math ($...$, \(...\))
+    text = re.sub(r"\$[^$]+\$", "", text)
+    text = re.sub(r"\\\([\s\S]*?\\\)", "", text)
     # Remove code blocks
     text = re.sub(r"```[\s\S]*?```", "", text)
     # Remove inline code
