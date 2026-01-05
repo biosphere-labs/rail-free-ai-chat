@@ -42,3 +42,7 @@ python -m epic_executor.cli /path/to/tasks
 ## License
 
 MIT
+
+---
+
+*Built with [Claude Code](https://claude.ai/code) in 1 hour.*
