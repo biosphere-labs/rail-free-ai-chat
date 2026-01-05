@@ -215,15 +215,14 @@ async def on_settings_update(settings):
 @cl.on_message
 async def on_message(message: cl.Message):
     """Handle incoming messages."""
+    import uuid
+    from pathlib import Path
+
     agent = cl.user_session.get("agent")
     thread_id = cl.user_session.get("thread_id")
     tts_enabled = cl.user_session.get("tts_enabled", True)
     voice = cl.user_session.get("voice", DEFAULT_VOICE)
     challenger_enabled = cl.user_session.get("challenger_enabled", True)
-
-    # Create response message
-    msg = cl.Message(content="")
-    await msg.send()
 
     # Get response from agent
     response = await run_agent_simple(
@@ -233,28 +232,36 @@ async def on_message(message: cl.Message):
         challenger_enabled=challenger_enabled,
     )
 
-    # Update message with response
-    msg.content = response
-    await msg.update()
-
     # Generate TTS if enabled
+    audio_element = None
     if tts_enabled and response:
         # Strip markdown for cleaner TTS
         tts_text = _strip_markdown(response)
         if tts_text:
             try:
                 audio_bytes = await speak(tts_text, voice)
-                # Create audio element
+                # Save audio to file for persistence
+                audio_dir = Path(".files/audio")
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                audio_path = audio_dir / f"{uuid.uuid4()}.mp3"
+                audio_path.write_bytes(audio_bytes)
+
+                # Create audio element with file path
                 audio_element = cl.Audio(
                     name="response.mp3",
-                    content=audio_bytes,
+                    path=str(audio_path),
                     display="inline",
                     auto_play=True,
                 )
-                msg.elements = [audio_element]
-                await msg.update()
             except Exception as e:
                 print(f"TTS error: {e}")
+
+    # Create and send complete message with audio
+    msg = cl.Message(
+        content=response,
+        elements=[audio_element] if audio_element else None,
+    )
+    await msg.send()
 
 
 def _strip_markdown(text: str) -> str:
