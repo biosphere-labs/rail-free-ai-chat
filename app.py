@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import chainlit as cl
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from chainlit.types import ThreadDict
@@ -6,10 +7,83 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Initialize SQLite schema for Chainlit persistence
+DB_PATH = "chat_history.db"
+
+def init_db():
+    """Create required tables for Chainlit SQLAlchemy data layer."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            "id" TEXT PRIMARY KEY,
+            "identifier" TEXT NOT NULL UNIQUE,
+            "metadata" TEXT NOT NULL DEFAULT '{}',
+            "createdAt" TEXT
+        );
+        CREATE TABLE IF NOT EXISTS threads (
+            "id" TEXT PRIMARY KEY,
+            "createdAt" TEXT,
+            "name" TEXT,
+            "userId" TEXT,
+            "userIdentifier" TEXT,
+            "tags" TEXT,
+            "metadata" TEXT,
+            FOREIGN KEY ("userId") REFERENCES users("id") ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS steps (
+            "id" TEXT PRIMARY KEY,
+            "name" TEXT NOT NULL,
+            "type" TEXT NOT NULL,
+            "threadId" TEXT NOT NULL,
+            "parentId" TEXT,
+            "streaming" INTEGER NOT NULL,
+            "waitForAnswer" INTEGER,
+            "isError" INTEGER,
+            "metadata" TEXT,
+            "tags" TEXT,
+            "input" TEXT,
+            "output" TEXT,
+            "createdAt" TEXT,
+            "start" TEXT,
+            "end" TEXT,
+            "generation" TEXT,
+            "showInput" TEXT,
+            "language" TEXT,
+            "indent" INTEGER,
+            FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS elements (
+            "id" TEXT PRIMARY KEY,
+            "threadId" TEXT,
+            "type" TEXT,
+            "url" TEXT,
+            "chainlitKey" TEXT,
+            "name" TEXT,
+            "display" TEXT,
+            "objectKey" TEXT,
+            "size" TEXT,
+            "page" INTEGER,
+            "language" TEXT,
+            "forId" TEXT,
+            "mime" TEXT
+        );
+        CREATE TABLE IF NOT EXISTS feedbacks (
+            "id" TEXT PRIMARY KEY,
+            "forId" TEXT NOT NULL,
+            "threadId" TEXT NOT NULL,
+            "value" INTEGER NOT NULL,
+            "comment" TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
 # SQLite persistence for chat history
 @cl.data_layer
 def get_data_layer():
-    return SQLAlchemyDataLayer(conninfo="sqlite+aiosqlite:///chat_history.db")
+    return SQLAlchemyDataLayer(conninfo=f"sqlite+aiosqlite:///{DB_PATH}")
 
 
 @cl.header_auth_callback
