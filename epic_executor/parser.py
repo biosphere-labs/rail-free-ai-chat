@@ -87,6 +87,11 @@ def extract_file_list(body: str, section_name: str) -> list[str]:
 
 
 def extract_dependencies(body: str, frontmatter: dict, self_task_num: int) -> list[int]:
+    """Extract dependencies from frontmatter depends_on field only.
+
+    Note: We intentionally don't scan body text for "Task X" references
+    because those are often forward references or notes, not actual dependencies.
+    """
     deps = set()
 
     if "depends_on" in frontmatter:
@@ -98,11 +103,7 @@ def extract_dependencies(body: str, frontmatter: dict, self_task_num: int) -> li
                 elif isinstance(d, str) and d.isdigit():
                     deps.add(int(d))
 
-    task_refs = re.findall(r"Task\s*(\d{1,3})", body, re.IGNORECASE)
-    for ref in task_refs:
-        deps.add(int(ref))
-
-    # Remove self-reference (task titles like "# Task 001:" would match)
+    # Remove self-reference just in case
     deps.discard(self_task_num)
 
     return sorted(deps)
