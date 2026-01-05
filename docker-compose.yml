@@ -1,0 +1,13 @@
+services:
+  rail-free-ai-chat:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount host home directory for file access
+      - ${HOME}:/host_home:rw
+      # Mount .env file for API keys
+      - ./.env:/app/.env:ro
+    environment:
+      - HOST_HOME=/host_home
+    restart: unless-stopped

@@ -1,0 +1,14 @@
+[project]
+name = "rail-free-ai-chat"
+version = "0.3.0"
+description = "LangGraph agent with Socratic challenger, Edge TTS, and Chainlit UI"
+requires-python = ">=3.10"
+
+dependencies = [
+  "langgraph>=0.2",
+  "langchain-openai>=0.3",
+  "langchain-mcp-adapters>=0.1",
+  "edge-tts>=7.0",
+  "chainlit>=1.3",
+  "python-dotenv>=1.0.1",
+]
