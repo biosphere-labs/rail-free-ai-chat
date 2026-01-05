@@ -147,3 +147,4 @@ Thumbs.db
 .chainlit/
 .files/
 .playwright-mcp/
+chat_history.db

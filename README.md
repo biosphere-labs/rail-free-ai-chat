@@ -17,22 +17,6 @@ A local AI chat application with text-to-speech and web search capabilities.
 3. Run: `chainlit run app.py`
 4. Open http://localhost:8000 in your browser
 
-## Epic Executor
-
-Also includes a CLI tool for executing task files in parallel. Point it at a folder of numbered markdown task files and it will:
-
-- Build a dependency graph from task references
-- Run independent tasks in parallel using AI agents
-- Verify each task's acceptance criteria before marking complete
-
-```bash
-# Preview the execution plan
-python -m epic_executor.cli /path/to/tasks --dry-run
-
-# Execute tasks
-python -m epic_executor.cli /path/to/tasks
-```
-
 ## Requirements
 
 - Python 3.10+
