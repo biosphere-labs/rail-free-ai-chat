@@ -65,7 +65,8 @@ def init_db():
             "page" INTEGER,
             "language" TEXT,
             "forId" TEXT,
-            "mime" TEXT
+            "mime" TEXT,
+            "props" TEXT
         );
         CREATE TABLE IF NOT EXISTS feedbacks (
             "id" TEXT PRIMARY KEY,
@@ -224,20 +225,18 @@ async def on_message(message: cl.Message):
     voice = cl.user_session.get("voice", DEFAULT_VOICE)
     challenger_enabled = cl.user_session.get("challenger_enabled", True)
 
-    # Progress step for visual feedback
-    current_step = None
+    # Create a status message that will show progress
+    status_msg = cl.Message(content="⏳ Processing...")
+    await status_msg.send()
 
-    async def on_stage_change(stage: str, description: str):
-        nonlocal current_step
-        # Close previous step
-        if current_step:
-            current_step.end = True
-            await current_step.update()
+    # Collect progress updates
+    progress_lines = []
 
-        # Create new step for current stage (skip "complete")
-        if stage != "complete":
-            current_step = cl.Step(name=description, type="run")
-            await current_step.send()
+    async def on_progress(stage: str, detail: str):
+        progress_lines.append(detail)
+        # Update the status message with accumulated progress
+        status_msg.content = "⏳ " + detail
+        await status_msg.update()
 
     # Get response from agent with progress
     response = await run_agent_with_progress(
@@ -245,23 +244,17 @@ async def on_message(message: cl.Message):
         message.content,
         thread_id=thread_id,
         challenger_enabled=challenger_enabled,
-        on_stage_change=on_stage_change,
+        on_progress=on_progress,
     )
-
-    # Close final step
-    if current_step:
-        current_step.end = True
-        await current_step.update()
 
     # Generate TTS if enabled
     audio_element = None
     if tts_enabled and response:
-        # Strip markdown for cleaner TTS
         tts_text = _strip_markdown(response)
         if tts_text:
             try:
-                tts_step = cl.Step(name="Generating audio...", type="run")
-                await tts_step.send()
+                status_msg.content = "⏳ 🔊 Generating audio..."
+                await status_msg.update()
 
                 audio_bytes = await speak(tts_text, voice)
                 # Save audio to file for persistence
@@ -277,18 +270,21 @@ async def on_message(message: cl.Message):
                     display="inline",
                     auto_play=True,
                 )
-
-                tts_step.end = True
-                await tts_step.update()
             except Exception as e:
                 print(f"TTS error: {e}")
 
-    # Create and send complete message with audio
-    msg = cl.Message(
-        content=response,
-        elements=[audio_element] if audio_element else None,
-    )
-    await msg.send()
+    # Build the final message with thinking process collapsed at the top
+    final_content = ""
+    if progress_lines and challenger_enabled:
+        final_content = "<details>\n<summary>💭 Thinking process</summary>\n\n"
+        final_content += "\n".join(f"- {line}" for line in progress_lines)
+        final_content += "\n</details>\n\n"
+    final_content += response
+
+    # Update the status message to become the final response (this preserves it in DB)
+    status_msg.content = final_content
+    status_msg.elements = [audio_element] if audio_element else []
+    await status_msg.update()
 
 
 def _strip_markdown(text: str) -> str:

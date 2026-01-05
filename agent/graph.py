@@ -52,6 +52,11 @@ async def brave_search(query: str, count: int = 3) -> list[dict]:
             print(f"Brave search error: {e}")
             return []
 
+AGENT_SYSTEM_PROMPT = """You are a helpful assistant. When responding:
+- Provide clear, accurate, and well-structured answers
+- Be direct and concise
+- IMPORTANT: Your response should be self-contained. Never reference "revisions", "feedback", "previous versions", or any internal process. Write as if this is your first and only response."""
+
 CHALLENGER_PROMPT = """You are a Socratic challenger with access to current web search results. Review the assistant's response and:
 
 1. **Fact-check**: Use the search context to verify claims. If something contradicts current information or is outdated, point it out with sources.
@@ -86,6 +91,11 @@ class AgentState(TypedDict):
     search_context: str  # Web search results for fact-checking
     current_stage: str  # For progress reporting
     challenge_feedback: str  # Feedback from challenger to refine response
+    # Detailed progress info for UI
+    search_query: str  # The search query used
+    search_summary: str  # Brief summary of search results
+    draft_preview: str  # Preview of current draft
+    stage_detail: str  # Detailed description of current stage
 
 
 def get_llm() -> ChatOpenAI:
@@ -133,26 +143,40 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
         """Call the ReAct agent, incorporating any challenge feedback."""
         messages = list(state["messages"])
 
+        # Add system prompt if not already present
+        if not any(isinstance(m, SystemMessage) for m in messages):
+            messages.insert(0, SystemMessage(content=AGENT_SYSTEM_PROMPT))
+
         # If there's challenge feedback, add it as context for refinement
         challenge_feedback = state.get("challenge_feedback", "")
         if challenge_feedback:
             # Add the challenge as a system instruction for refinement
             refinement_msg = HumanMessage(
-                content=f"Please revise your previous response based on this feedback:\n\n{challenge_feedback}"
+                content=f"Please revise your previous response based on this feedback. Remember to write a complete, self-contained response without referencing any revisions:\n\n{challenge_feedback}"
             )
             messages.append(refinement_msg)
 
         result = await react_agent.ainvoke({"messages": messages})
+
+        # Get preview of the response
+        draft_preview = ""
+        for msg in reversed(result["messages"]):
+            if isinstance(msg, AIMessage) and msg.content:
+                draft_preview = msg.content[:150] + "..." if len(msg.content) > 150 else msg.content
+                break
+
         return {
             "messages": result["messages"],
             "current_stage": "drafting",
             "challenge_feedback": "",  # Clear feedback after use
+            "draft_preview": draft_preview,
+            "stage_detail": f"Draft: {draft_preview}",
         }
 
     async def gather_search_context(state: AgentState) -> dict:
         """Search for context to fact-check the response."""
         if not state.get("challenger_enabled", True):
-            return {"search_context": "", "current_stage": "complete"}
+            return {"search_context": "", "current_stage": "complete", "search_query": "", "search_summary": ""}
 
         # Get the last AI message
         last_ai_msg = None
@@ -162,7 +186,7 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
                 break
 
         if not last_ai_msg:
-            return {"search_context": "", "current_stage": "complete"}
+            return {"search_context": "", "current_stage": "complete", "search_query": "", "search_summary": ""}
 
         # Get the user's question
         user_question = ""
@@ -181,19 +205,35 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
         results = await brave_search(search_query, count=3)
 
         if not results:
-            return {"search_context": "No search results available.", "current_stage": "fact-checking"}
+            return {
+                "search_context": "No search results available.",
+                "current_stage": "fact-checking",
+                "search_query": search_query,
+                "search_summary": "No results found",
+                "stage_detail": f"🔍 Searched: \"{search_query}\" → No results",
+            }
 
         # Format results
         context_parts = [f"Web search for '{search_query}':"]
         for r in results:
             context_parts.append(f"- {r['title']}: {r['description']}")
 
-        return {"search_context": "\n".join(context_parts), "current_stage": "fact-checking"}
+        # Create summary for UI
+        search_summary = f"{len(results)} results found"
+        stage_detail = f"🔍 Searched: \"{search_query}\" → {search_summary}"
+
+        return {
+            "search_context": "\n".join(context_parts),
+            "current_stage": "fact-checking",
+            "search_query": search_query,
+            "search_summary": search_summary,
+            "stage_detail": stage_detail,
+        }
 
     async def challenge_response(state: AgentState) -> dict:
         """Socratic challenger reviews the response with search context."""
         if not state.get("challenger_enabled", True):
-            return {"current_stage": "complete", "challenge_feedback": ""}
+            return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete"}
 
         # Get the last AI message
         last_ai_msg = None
@@ -203,7 +243,7 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
                 break
 
         if not last_ai_msg:
-            return {"current_stage": "complete", "challenge_feedback": ""}
+            return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete"}
 
         # Get conversation context (last few messages)
         recent_messages = state["messages"][-6:]
@@ -223,17 +263,25 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
         challenge_text = response.content.strip()
 
         if challenge_text.startswith("APPROVED"):
-            return {"current_stage": "complete", "challenge_feedback": ""}
+            reason = challenge_text.replace("APPROVED:", "").strip()[:100]
+            return {
+                "current_stage": "complete",
+                "challenge_feedback": "",
+                "stage_detail": f"✅ Approved: {reason}",
+            }
 
         if challenge_text.startswith("CHALLENGE:"):
             challenge_question = challenge_text.replace("CHALLENGE:", "").strip()
+            # Truncate for display
+            display_challenge = challenge_question[:150] + "..." if len(challenge_question) > 150 else challenge_question
             return {
                 "challenge_feedback": challenge_question,
                 "challenge_count": state.get("challenge_count", 0) + 1,
                 "current_stage": "refining",
+                "stage_detail": f"🤔 Challenge: {display_challenge}",
             }
 
-        return {"current_stage": "complete", "challenge_feedback": ""}
+        return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete"}
 
     def should_challenge(state: AgentState) -> Literal["challenge", "end"]:
         """Decide whether to run the challenger."""
@@ -375,7 +423,7 @@ async def run_agent_with_progress(
     message: str,
     thread_id: str = "default",
     challenger_enabled: bool = True,
-    on_stage_change: callable = None,
+    on_progress: callable = None,
 ) -> str:
     """Run the agent with progress callbacks.
 
@@ -384,22 +432,14 @@ async def run_agent_with_progress(
         message: The user's message.
         thread_id: Conversation thread ID for state persistence.
         challenger_enabled: Whether to enable the Socratic challenger.
-        on_stage_change: Async callback called with (stage_name, stage_description).
+        on_progress: Async callback called with (stage_name, stage_detail) for each progress update.
 
     Returns:
         The complete response string.
     """
     config = {"configurable": {"thread_id": thread_id}}
 
-    stage_descriptions = {
-        "drafting": "Drafting response...",
-        "fact-checking": "Fact-checking with web search...",
-        "challenging": "Reviewing for clarity and accuracy...",
-        "refining": "Refining based on feedback...",
-        "complete": "Complete",
-    }
-
-    last_stage = None
+    last_detail = None
 
     async for event in agent.astream(
         {
@@ -409,15 +449,21 @@ async def run_agent_with_progress(
             "search_context": "",
             "current_stage": "drafting",
             "challenge_feedback": "",
+            "search_query": "",
+            "search_summary": "",
+            "draft_preview": "",
+            "stage_detail": "",
         },
         config=config,
         stream_mode="values",
     ):
         current_stage = event.get("current_stage", "")
-        if current_stage and current_stage != last_stage and on_stage_change:
-            description = stage_descriptions.get(current_stage, current_stage)
-            await on_stage_change(current_stage, description)
-            last_stage = current_stage
+        stage_detail = event.get("stage_detail", "")
+
+        # Report progress when we have new detail
+        if stage_detail and stage_detail != last_detail and on_progress:
+            await on_progress(current_stage, stage_detail)
+            last_detail = stage_detail
 
     # Get final state
     final_state = await agent.aget_state(config)
