@@ -100,7 +100,7 @@ async def on_chat_resume(thread: ThreadDict):
     cl.user_session.set("thread_id", thread["id"])
 
 
-from agent import create_agent, run_agent_simple
+from agent import create_agent, run_agent_with_progress
 from agent.tools import get_tools
 from agent.mcp_config import get_enabled_servers
 from tts import speak, POPULAR_VOICES, DEFAULT_VOICE
@@ -224,13 +224,34 @@ async def on_message(message: cl.Message):
     voice = cl.user_session.get("voice", DEFAULT_VOICE)
     challenger_enabled = cl.user_session.get("challenger_enabled", True)
 
-    # Get response from agent
-    response = await run_agent_simple(
+    # Progress step for visual feedback
+    current_step = None
+
+    async def on_stage_change(stage: str, description: str):
+        nonlocal current_step
+        # Close previous step
+        if current_step:
+            current_step.end = True
+            await current_step.update()
+
+        # Create new step for current stage (skip "complete")
+        if stage != "complete":
+            current_step = cl.Step(name=description, type="run")
+            await current_step.send()
+
+    # Get response from agent with progress
+    response = await run_agent_with_progress(
         agent,
         message.content,
         thread_id=thread_id,
         challenger_enabled=challenger_enabled,
+        on_stage_change=on_stage_change,
     )
+
+    # Close final step
+    if current_step:
+        current_step.end = True
+        await current_step.update()
 
     # Generate TTS if enabled
     audio_element = None
@@ -239,6 +260,9 @@ async def on_message(message: cl.Message):
         tts_text = _strip_markdown(response)
         if tts_text:
             try:
+                tts_step = cl.Step(name="Generating audio...", type="run")
+                await tts_step.send()
+
                 audio_bytes = await speak(tts_text, voice)
                 # Save audio to file for persistence
                 audio_dir = Path(".files/audio")
@@ -253,6 +277,9 @@ async def on_message(message: cl.Message):
                     display="inline",
                     auto_play=True,
                 )
+
+                tts_step.end = True
+                await tts_step.update()
             except Exception as e:
                 print(f"TTS error: {e}")
 
