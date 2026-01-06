@@ -55,7 +55,3 @@ The Socratic Challenger reviews each response against six criteria and can reque
 ## License
 
 MIT
-
----
-
-*Built with [Claude Code](https://claude.ai/code) in 1 hour.*
