@@ -1,4 +1,4 @@
-# Rail Free AI Chat
+# AI Chat
 
 A local AI chat application with text-to-speech and web search capabilities.
 
