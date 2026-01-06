@@ -1,4 +1,6 @@
 import asyncio
+from pathlib import Path
+from typing import AsyncGenerator
 import edge_tts
 
 DEFAULT_VOICE = "en-US-AriaNeural"
@@ -33,6 +35,40 @@ async def speak(text: str, voice: str = DEFAULT_VOICE) -> bytes:
             audio_data += chunk["data"]
 
     return audio_data
+
+
+async def speak_stream(text: str, voice: str = DEFAULT_VOICE) -> AsyncGenerator[bytes, None]:
+    """Stream text to speech chunks using Edge TTS.
+
+    Args:
+        text: The text to convert to speech.
+        voice: The voice ID to use.
+
+    Yields:
+        Audio data chunks as bytes (MP3 format).
+    """
+    communicate = edge_tts.Communicate(text, voice)
+
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            yield chunk["data"]
+
+
+async def speak_to_file(text: str, output_path: Path, voice: str = DEFAULT_VOICE) -> None:
+    """Stream text to speech directly to a file.
+
+    Args:
+        text: The text to convert to speech.
+        output_path: Path to write the MP3 file.
+        voice: The voice ID to use.
+    """
+    communicate = edge_tts.Communicate(text, voice)
+
+    with open(output_path, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+                f.flush()  # Flush each chunk so it's readable immediately
 
 
 async def list_voices(language_filter: str = "en") -> list[dict]:

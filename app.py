@@ -104,7 +104,7 @@ async def on_chat_resume(thread: ThreadDict):
 from agent import create_agent, run_agent_with_progress
 from agent.tools import get_tools
 from agent.mcp_config import get_enabled_servers
-from tts import speak, POPULAR_VOICES, DEFAULT_VOICE
+from tts import speak_to_file, POPULAR_VOICES, DEFAULT_VOICE
 
 # Available models on DeepInfra
 AVAILABLE_MODELS = [
@@ -229,11 +229,11 @@ async def on_message(message: cl.Message):
     status_msg = cl.Message(content="⏳ Processing...")
     await status_msg.send()
 
-    # Collect progress updates
-    progress_lines = []
+    # Collect progress updates (detail, full_content)
+    progress_items = []
 
-    async def on_progress(stage: str, detail: str):
-        progress_lines.append(detail)
+    async def on_progress(stage: str, detail: str, full_content: str = ""):
+        progress_items.append((detail, full_content))
         # Update the status message with accumulated progress
         status_msg.content = "⏳ " + detail
         await status_msg.update()
@@ -247,44 +247,49 @@ async def on_message(message: cl.Message):
         on_progress=on_progress,
     )
 
-    # Generate TTS if enabled
-    audio_element = None
+    # Build the final message with thinking process collapsed at the top
+    # Each thinking item is expandable to show full content
+    final_content = ""
+    if progress_items and challenger_enabled:
+        final_content = "<details>\n<summary>💭 Thinking process</summary>\n\n"
+        for detail, full_content in progress_items:
+            if full_content and full_content != detail:
+                # Make expandable item with full content
+                final_content += f"<details>\n<summary>{detail}</summary>\n\n{full_content}\n\n</details>\n"
+            else:
+                # Simple item without expansion
+                final_content += f"- {detail}\n"
+        final_content += "\n</details>\n\n"
+    final_content += response
+
+    # Show response immediately (don't wait for TTS)
+    status_msg.content = final_content
+    await status_msg.update()
+
+    # Generate TTS in background if enabled (user can click play when ready)
     if tts_enabled and response:
         tts_text = _strip_markdown(response)
         if tts_text:
             try:
-                status_msg.content = "⏳ 🔊 Generating audio..."
-                await status_msg.update()
-
-                audio_bytes = await speak(tts_text, voice)
-                # Save audio to file for persistence
+                # Prepare audio file path
                 audio_dir = Path(".files/audio")
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 audio_path = audio_dir / f"{uuid.uuid4()}.mp3"
-                audio_path.write_bytes(audio_bytes)
 
-                # Create audio element with file path
+                # Stream TTS directly to file (chunks written as they arrive)
+                await speak_to_file(tts_text, audio_path, voice)
+
+                # Add audio element (no auto-play - user clicks to play)
                 audio_element = cl.Audio(
-                    name="response.mp3",
+                    name="🔊 Listen",
                     path=str(audio_path),
                     display="inline",
-                    auto_play=True,
+                    auto_play=False,
                 )
+                status_msg.elements = [audio_element]
+                await status_msg.update()
             except Exception as e:
                 print(f"TTS error: {e}")
-
-    # Build the final message with thinking process collapsed at the top
-    final_content = ""
-    if progress_lines and challenger_enabled:
-        final_content = "<details>\n<summary>💭 Thinking process</summary>\n\n"
-        final_content += "\n".join(f"- {line}" for line in progress_lines)
-        final_content += "\n</details>\n\n"
-    final_content += response
-
-    # Update the status message to become the final response (this preserves it in DB)
-    status_msg.content = final_content
-    status_msg.elements = [audio_element] if audio_element else []
-    await status_msg.update()
 
 
 def _strip_markdown(text: str) -> str:

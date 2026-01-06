@@ -15,13 +15,15 @@ WORKDIR /app
 
 # Copy project files
 COPY pyproject.toml .
+COPY uv.lock .
 COPY app.py .
 COPY chainlit.md .
 COPY agent/ agent/
 COPY tts/ tts/
+COPY .chainlit/ .chainlit/
 
 # Install dependencies
-RUN uv sync --no-dev
+RUN uv sync --frozen --no-dev
 
 # Expose Chainlit port
 EXPOSE 8000

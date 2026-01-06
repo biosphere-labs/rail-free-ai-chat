@@ -95,7 +95,8 @@ class AgentState(TypedDict):
     search_query: str  # The search query used
     search_summary: str  # Brief summary of search results
     draft_preview: str  # Preview of current draft
-    stage_detail: str  # Detailed description of current stage
+    stage_detail: str  # Short summary for display (e.g. "Draft: preview...")
+    stage_full: str  # Full content for expandable view
 
 
 def get_llm() -> ChatOpenAI:
@@ -160,8 +161,10 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
 
         # Get preview of the response
         draft_preview = ""
+        draft_full = ""
         for msg in reversed(result["messages"]):
             if isinstance(msg, AIMessage) and msg.content:
+                draft_full = msg.content
                 draft_preview = msg.content[:150] + "..." if len(msg.content) > 150 else msg.content
                 break
 
@@ -170,7 +173,8 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
             "current_stage": "drafting",
             "challenge_feedback": "",  # Clear feedback after use
             "draft_preview": draft_preview,
-            "stage_detail": f"Draft: {draft_preview}",
+            "stage_detail": f"📝 Draft: {draft_preview}",
+            "stage_full": draft_full,
         }
 
     async def gather_search_context(state: AgentState) -> dict:
@@ -211,16 +215,20 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
                 "search_query": search_query,
                 "search_summary": "No results found",
                 "stage_detail": f"🔍 Searched: \"{search_query}\" → No results",
+                "stage_full": "No search results found.",
             }
 
         # Format results
         context_parts = [f"Web search for '{search_query}':"]
+        results_full = []
         for r in results:
             context_parts.append(f"- {r['title']}: {r['description']}")
+            results_full.append(f"**{r['title']}**\n{r['description']}\n{r['url']}")
 
         # Create summary for UI
         search_summary = f"{len(results)} results found"
         stage_detail = f"🔍 Searched: \"{search_query}\" → {search_summary}"
+        stage_full = "\n\n".join(results_full)
 
         return {
             "search_context": "\n".join(context_parts),
@@ -228,12 +236,13 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
             "search_query": search_query,
             "search_summary": search_summary,
             "stage_detail": stage_detail,
+            "stage_full": stage_full,
         }
 
     async def challenge_response(state: AgentState) -> dict:
         """Socratic challenger reviews the response with search context."""
         if not state.get("challenger_enabled", True):
-            return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete"}
+            return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete", "stage_full": ""}
 
         # Get the last AI message
         last_ai_msg = None
@@ -243,7 +252,7 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
                 break
 
         if not last_ai_msg:
-            return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete"}
+            return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete", "stage_full": ""}
 
         # Get conversation context (last few messages)
         recent_messages = state["messages"][-6:]
@@ -263,11 +272,13 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
         challenge_text = response.content.strip()
 
         if challenge_text.startswith("APPROVED"):
-            reason = challenge_text.replace("APPROVED:", "").strip()[:100]
+            reason = challenge_text.replace("APPROVED:", "").strip()
+            reason_short = reason[:100] + "..." if len(reason) > 100 else reason
             return {
                 "current_stage": "complete",
                 "challenge_feedback": "",
-                "stage_detail": f"✅ Approved: {reason}",
+                "stage_detail": f"✅ Approved: {reason_short}",
+                "stage_full": reason,
             }
 
         if challenge_text.startswith("CHALLENGE:"):
@@ -279,9 +290,10 @@ def create_agent(tools: list = None, checkpointer=None, challenger_enabled: bool
                 "challenge_count": state.get("challenge_count", 0) + 1,
                 "current_stage": "refining",
                 "stage_detail": f"🤔 Challenge: {display_challenge}",
+                "stage_full": challenge_question,
             }
 
-        return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete"}
+        return {"current_stage": "complete", "challenge_feedback": "", "stage_detail": "✅ Complete", "stage_full": ""}
 
     def should_challenge(state: AgentState) -> Literal["challenge", "end"]:
         """Decide whether to run the challenger."""
@@ -432,7 +444,7 @@ async def run_agent_with_progress(
         message: The user's message.
         thread_id: Conversation thread ID for state persistence.
         challenger_enabled: Whether to enable the Socratic challenger.
-        on_progress: Async callback called with (stage_name, stage_detail) for each progress update.
+        on_progress: Async callback called with (stage_name, stage_detail, stage_full) for each progress update.
 
     Returns:
         The complete response string.
@@ -453,16 +465,18 @@ async def run_agent_with_progress(
             "search_summary": "",
             "draft_preview": "",
             "stage_detail": "",
+            "stage_full": "",
         },
         config=config,
         stream_mode="values",
     ):
         current_stage = event.get("current_stage", "")
         stage_detail = event.get("stage_detail", "")
+        stage_full = event.get("stage_full", "")
 
         # Report progress when we have new detail
         if stage_detail and stage_detail != last_detail and on_progress:
-            await on_progress(current_stage, stage_detail)
+            await on_progress(current_stage, stage_detail, stage_full)
             last_detail = stage_detail
 
     # Get final state
